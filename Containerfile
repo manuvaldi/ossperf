@@ -35,6 +35,6 @@ RUN \
 
 COPY ossperf.sh /usr/bin/ossperf
 
-VOLUME /root/testfiles
+VOLUME /testfiles
 
 ENTRYPOINT ["ossperf"]

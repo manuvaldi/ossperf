@@ -3,6 +3,8 @@
 
 # OSSperf
 
+NOTE: Based on https://github.com/christianbaun/ossperf work (forked)
+
 OSSperf is a lightweight command-line tool for analyzing the performance and data integrity of storage services that implement the S3 API, the Swift API, or the Azure Blob Storage API. The tool creates a user-defined number of files with random content and of a specified size inside a local directory. The tool creates a bucket, uploads and downloads the files, and afterward removes the bucket. The time required to carry out theses S3/Swift/Azure-related tasks is measured and printed out on the command line.
 
 Until November 2017, the OSSperf tool had the name S3perf because, initially, the tool had only implemented support for storage services, which implement the S3 API. Because now, the solution targets also storage services that implement different APIs, the tool was renamed to OSSperf. OSS stands for Object-based Storage Services.
@@ -40,6 +42,7 @@ Storage services tested with this tool are so far:
     -a : use the Swift API and not the S3 API (this requires the python client for the Swift API and the environment variables ST_AUTH, ST_USER and ST_KEY)
     -m : use the S3 API with the Minio Client (mc) instead of s3cmd. It is required to provide the alias of the mc configuration that shall be used
     -z : use the Azure CLI instead of the S3 API (this requires the python client for the Azure CLI and the environment variables AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_ACCESS_KEY)
+    -c : use the AzCopy CLI instead of Azure CLI or S3 API (this requires "azcopy login" and the environment variable AZURE_STORAGE_ACCOUNT)
     -g : use the Google Cloud Storage CLI instead of the s3cmd (this requires the python client for the Google API)
     -w : use the AWS CLI instead of the s3cmd (this requires the installation and configuration of the aws cli client)
     -l : use a specific site (location) for the bucket. This is supported e.g. by the AWS S3 and Google Cloud Storage
@@ -70,6 +73,8 @@ These software packages are optional:
 
 ## Examples
 
+### With script
+
 This command creates five files of size 1 MB each and uses them to test the performance and data integrity of the storage service. The new bucket used has the name ossperf-testbucket, and the uploads and downloads are carried out in parallel. The [s3cmd](https://github.com/s3tools/s3cmd) command line tool is used.
 
 `./ossperf.sh -n 5 -s 1048576 -b ossperf-testbucket -p`
@@ -81,6 +86,11 @@ This command does the same, but uses the Minio Client [mc](https://github.com/mi
 This command creates ten files of size 512 kB each and uses them to test the performance and data integrity of the AWS S3 in the region eu-west-2 (Frankfurt am Main). The new bucket used has the name my-unique-bucketname, and the uploads and downloads are carried out in parallel. The [aws](https://github.com/aws/aws-cli) command line tool is used.
 
 `./ossperf.sh -n 10 -s 524288 -b my-unique-bucketname -p -w eu-west-2`
+
+### With podman/docker
+
+`podman run --name testfiles -it --rm -v /tmp/testfiles:/testfiles -v ~/.s3cfg:/root/.s3cfg ossperf:latest -n 10000 -s 4096 -p`
+
 
 ## Related Work
 
