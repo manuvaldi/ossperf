@@ -371,7 +371,7 @@ if [ "$GOOGLE_API" -eq 1 ] ; then
 fi
 
 # Path of the directory for the files
-DIRECTORY="testfiles"
+DIRECTORY="testfiles/files"
 # Name for the bucket to store the files
 # ATTENTION! When using Google Cloud Storage, Amazon S3, Swift or FakeS3, it is ok when the bucket name is written in lower case.
 # But when using Nimbus Cumulus and S3ninja, the bucket name needs to be in upper case.
@@ -561,7 +561,7 @@ fi
 
 # Create the directory
 # This is not a part of the benchmark!
-if mkdir ${DIRECTORY} ; then
+if mkdir -p ${DIRECTORY} ; then
   echo -e "${GREEN}[OK] The local directory ${DIRECTORY} has been created.${NC}"
 else
   echo -e "${RED}[ERROR] Unable to create the local directory ${DIRECTORY}.${NC}" && exit 1
