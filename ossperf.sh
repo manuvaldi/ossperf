@@ -1,10 +1,11 @@
 #!/bin/bash
 #
 # title:        ossperf.sh
-# description:  This script analyzes the performance and data integrity of 
-#               S3-compatible storage services 
+# description:  This script analyzes the performance and data integrity of
+#               S3-compatible storage services
 # author:       Dr. Christian Baun
 # contributors: Rosa Maria Spanou, Marius Wernicke, Brian_P, agracie, justinjrestivo
+# Fork        : Manuel Valle
 # url:          https://github.com/christianbaun/ossperf
 # license:      GPLv3
 # date:         September 29th 2021
@@ -17,6 +18,7 @@
 # optional      swift -- Python client for the Swift API (tested with v2.3.1),
 #               mc -- Minio Client for the S3 API (tested with RELEASE.2020-02-05T20-07-22Z)
 #               az -- Python client for the Azure CLI (tested with v2.0),
+#               azcopy -- azcopy binary from Microsoft
 #               gsutil -- Python client for the Google API (tested with v4.27 and 4.38)
 #               aws -- AWS CLI client for the S3 API (tested with v1.15.6)
 # notes:        s3cmd need to be configured first via s3cmd --configure
@@ -29,43 +31,44 @@ function usage
 echo "$SCRIPT -n files -s size [-b <bucket>] [-u] [-a] [-m <alias>] [-z] [-g] [-w] [-l <location>] [-d <url>] [-k] [-p] [-o]
 
 This script analyzes the performance and data integrity of S3-compatible
-storage services 
+storage services
 
 Arguments:
 -h : show this message on screen
 -n : number of files to be created
 -s : size of the files to be created in bytes (max 16777216 = 16 MB)
--b : ossperf will create per default a new bucket ossperf-testbucket (or 
-     OSSPERF-TESTBUCKET, in case the argument -u is set). This is not a 
-     problem when private cloud deployments are investigated, but for 
-     public cloud scenarios it may become a problem, because object-based 
-     storage services implement a global bucket namespace. This means 
-     that all bucket names must be unique. With the argument -b <bucket> 
+-b : ossperf will create per default a new bucket ossperf-testbucket (or
+     OSSPERF-TESTBUCKET, in case the argument -u is set). This is not a
+     problem when private cloud deployments are investigated, but for
+     public cloud scenarios it may become a problem, because object-based
+     storage services implement a global bucket namespace. This means
+     that all bucket names must be unique. With the argument -b <bucket>
      the users of ossperf have the freedom to specify the bucket name
--u : use upper-case letters for the bucket name (this is required for Nimbus 
+-u : use upper-case letters for the bucket name (this is required for Nimbus
      Cumulus and S3ninja)
--a : use the Swift API and not the S3 API (this requires the python client 
-     for the Swift API and the environment variables ST_AUTH, ST_USER and 
+-a : use the Swift API and not the S3 API (this requires the python client
+     for the Swift API and the environment variables ST_AUTH, ST_USER and
      ST_KEY)
--m : use the S3 API with the Minio Client (mc) instead of s3cmd. It is 
+-m : use the S3 API with the Minio Client (mc) instead of s3cmd. It is
      required to provide the alias of the mc configuration that shall be used
--z : use the Azure CLI instead of the S3 API (this requires the python client 
-     for the Azure CLI and the environment variables AZURE_STORAGE_ACCOUNT 
+-z : use the Azure CLI instead of the S3 API (this requires the python client
+     for the Azure CLI and the environment variables AZURE_STORAGE_ACCOUNT
      and AZURE_STORAGE_ACCESS_KEY)
+-c : use Azcopy CLI binary instead of Azure CLI
 -g : use the Google Cloud Storage CLI instead of the s3cmd (this requires
      the python client for the Google API)
--w : use the AWS CLI instead of the s3cmd (this requires the installation 
+-w : use the AWS CLI instead of the s3cmd (this requires the installation
      and configuration of the aws cli client)
--r : use the s4cmd client. It can only interact with the AWS S3 service.  
-     The tool uses the ~/.s3cfg configuration file if it exists. Otherwise it 
-     will use the content of the environment variables S3_ACCESS_KEY and 
-     S3_SECRET_KEY to access the AWS S3 service. For services that are not 
-     AWS S3, it is required to provide the endpoint-url parameter with the IP 
-     and Port addresses of the service, so please provide this as additional 
+-r : use the s4cmd client. It can only interact with the AWS S3 service.
+     The tool uses the ~/.s3cfg configuration file if it exists. Otherwise it
+     will use the content of the environment variables S3_ACCESS_KEY and
+     S3_SECRET_KEY to access the AWS S3 service. For services that are not
+     AWS S3, it is required to provide the endpoint-url parameter with the IP
+     and Port addresses of the service, so please provide this as additional
      parameter: http://<IP>:<PORT>
--l : use a specific site (location) for the bucket. This is supported e.g. 
+-l : use a specific site (location) for the bucket. This is supported e.g.
      by the AWS S3 and Google Cloud Storage
--d : If the aws cli shall be used with an S3-compatible non-Amazon service, 
+-d : If the aws cli shall be used with an S3-compatible non-Amazon service,
      please specify with this parameter the endpoint-url
 -k : keep the local files and the directory afterwards (do not clean up)
 -p : upload and download the files in parallel
@@ -95,10 +98,11 @@ UPPERCASE=0
 SWIFT_API=0
 MINIO_CLIENT=0
 MINIO_CLIENT_ALIAS=
-BUCKET_LOCATION=0 
+BUCKET_LOCATION=0
 BUCKET_LOCATION_SITE=
-ENDPOINT_URL=0 
+ENDPOINT_URL=0
 ENDPOINT_URL_ADDRESS=
+AZCOPY_CLI=0
 AZURE_CLI=0
 S4CMD_CLIENT=0
 GOOGLE_API=0
@@ -120,43 +124,44 @@ WHITE='\033[0;37m'        # White color
 
 # If no arguments are provided at all...
 if [ $# -eq 0 ]; then
-    echo -e "${RED}[ERROR] No arguments provided! ${OPTARG} ${NC}" 
-    echo -e "${YELLOW}[INFO] You need to provide at least the number of files and their size with -n <files> and -s <size>${OPTARG} ${NC}\n" 
+    echo -e "${RED}[ERROR] No arguments provided! ${OPTARG} ${NC}"
+    echo -e "${YELLOW}[INFO] You need to provide at least the number of files and their size with -n <files> and -s <size>${OPTARG} ${NC}\n"
     usage
 fi
 
-while getopts "hn:s:b:uam:zgwrl:d:kpo" ARG ; do
+while getopts "hn:s:b:uam:zcgwrl:d:kpo" ARG ; do
   case $ARG in
     h) usage ;;
     n) NUM_FILES=${OPTARG} ;;
     s) SIZE_FILES=${OPTARG} ;;
     # If the flag has been set => $NOT_CLEAN_UP gets value 1
     b) BUCKETNAME_PARAMETER=1
-       BUCKET=${OPTARG} ;; 
+       BUCKET=${OPTARG} ;;
     u) UPPERCASE=1 ;;
     a) SWIFT_API=1 ;;
-    m) MINIO_CLIENT=1 
+    m) MINIO_CLIENT=1
        MINIO_CLIENT_ALIAS=${OPTARG} ;;
     z) AZURE_CLI=1 ;;
+    c) AZCOPY_CLI=1 ;;
     g) GOOGLE_API=1 ;;
     w) AWS_CLI_API=1 ;;
     r) S4CMD_CLIENT=1 ;;
-    l) BUCKET_LOCATION=1 
+    l) BUCKET_LOCATION=1
        BUCKET_LOCATION_SITE=${OPTARG} ;;
-    d) ENDPOINT_URL=1 
+    d) ENDPOINT_URL=1
        ENDPOINT_URL_ADDRESS=${OPTARG} ;;
     k) NOT_CLEAN_UP=1 ;;
     p) PARALLEL=1 ;;
     o) OUTPUT_FILE=1 ;;
-    *) echo -e "${RED}[ERROR] Invalid option! ${OPTARG} ${NC}" 
+    *) echo -e "${RED}[ERROR] Invalid option! ${OPTARG} ${NC}"
        exit 1
        ;;
   esac
 done
 
-# If neither using the Swift client, the Minio client (mc), the Azure client (az), the s4cmd client 
+# If neither using the Swift client, the Minio client (mc), the Azure client (az), the s4cmd client
 # or the Google storage client (gsutil) has been specified via command line parameter...
-if [[ "$MINIO_CLIENT" -ne 1  && "$AZURE_CLI" -ne 1 && "$S4CMD_CLIENT" -ne 1 && "$AWS_CLI_API" -ne 1 && "$GOOGLE_API" -ne 1 && "$SWIFT_API" -ne 1 ]] ; then
+if [[ "$MINIO_CLIENT" -ne 1  && "$AZURE_CLI" -ne 1 && "AZCOPY_CLI" -ne 1 && "$S4CMD_CLIENT" -ne 1 && "$AWS_CLI_API" -ne 1 && "$GOOGLE_API" -ne 1 && "$SWIFT_API" -ne 1 ]] ; then
    # ... then we use the command line client s3cmd. This is the default client of ossperf
    S3PERF_CLIENT=1
    echo -e "${YELLOW}[INFO] ossperf will use the tool s3cmd because no other client tool has been specified via command line parameter.${NC}"
@@ -176,7 +181,7 @@ elif [[ "$OSTYPE" == "darwin"* ]]; then
     echo -e "${YELLOW}[INFO] The operating system is Mac OS X.${NC}"
     echo "${OSTYPE}"
 elif [[ "$OSTYPE" == "msys" ]]; then
-    # Windows 
+    # Windows
     echo -e "${YELLOW}[INFO] The operating system is Windows.${NC}"
     echo "${OSTYPE}"
 elif [[ "$OSTYPE" == "cygwin" ]]; then
@@ -249,7 +254,7 @@ if [ "$MINIO_CLIENT" -eq 1 ] ; then
     exit 1
   else
     echo -e "${YELLOW}[INFO] The Minio Client (mc) has been found on this system.${NC}"
-    mc version | grep Version 
+    mc version | grep Version
   fi
 fi
 
@@ -260,11 +265,11 @@ if [ "$AWS_CLI_API" -eq 1 ] ; then
     exit 1
   else
     echo -e "${YELLOW}[INFO] The AWS CLI Client (aws) has been found on this system.${NC}"
-    aws --version 
+    aws --version
 
-    # If the user wants to use the AWS CLI with an S3-compatible non-Amazon service, 
+    # If the user wants to use the AWS CLI with an S3-compatible non-Amazon service,
     # the script needs to check, if the environment variables AWS_ACCESS_KEY_ID
-    # and AWS_SECRET_ACCESS_KEY are set 
+    # and AWS_SECRET_ACCESS_KEY are set
     if [[ "$ENDPOINT_URL" -eq 1 ]] ; then
 
       # Check, if the environment variable AWS_ACCESS_KEY_ID is set
@@ -296,12 +301,12 @@ if [ "$SWIFT_API" -eq 1 ] ; then
   if [ -z "$ST_AUTH" ] ; then
     echo -e "${RED}[ERROR] If the Swift API shall be used, the environment variable ST_AUTH must contain the Auth URL of the storage service. Please set it with this command:${NC}\nexport ST_AUTH=http://<IP_or_URL>/auth/v1.0" && exit 1
   fi
-  
+
   # ... the script needs to check, if the environment variable ST_USER is set
   if [ -z "$ST_USER" ] ; then
     echo -e "${RED}[ERROR] If the Swift API shall be used, the environment variable ST_USER must contain the Username of the storage service. Please set it with this command:${NC}\nexport ST_USER=<username>" && exit 1
   fi
-  
+
   # ... the script needs to check, if the environment variable ST_KEY is set
   if [ -z "$ST_KEY" ] ; then
     echo -e "${RED}[ERROR] If the Swift API shall be used, the environment variable ST_KEY must contain the Password of the storage service. Please set it with this command:${NC}\nexport ST_KEY=<password>" && exit 1
@@ -323,10 +328,27 @@ if [ "$AZURE_CLI" -eq 1 ] ; then
   if [ -z "$AZURE_STORAGE_ACCOUNT" ] ; then
     echo -e "${RED}[ERROR] If the Azure CLI shall be used, the environment variable AZURE_STORAGE_ACCOUNT must contain the Storage Account Name of the storage service. Please set it with this command:${NC}\nexport AZURE_STORAGE_ACCOUNT=<storage_account_name>" && exit 1
   fi
-  
+
   # ... the script needs to check, if the environment variable AZURE_STORAGE_ACCESS_KEY is set
   if [ -z "$AZURE_STORAGE_ACCESS_KEY" ] ; then
-    echo -e "${RED}[ERROR] If the Azure CLI shall be used, the environment variable AZURE_STORAGE_ACCESS_KEY must contain the Account Key of the storage service. Please set it with this command:${NC}\nexport AZURE_STORAGE_ACCESS_KEY=<storage_account_key>" && exit 1
+    echo -e "${RED}[ERROR] If the Azure CLI shall be used, the environment variable AZURE_STORAGE_ACCESS_KEY must contain the Account Key of the storage service. Please set it with this command:${NC}\nexport AZURE_STORAGE_KEY=<storage_account_key>" && exit 1
+  fi
+fi
+
+# Only if the user wants to use the AzCopy CLI
+if [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # ... the script needs to check, if the command line tool azcopy installed
+  if ! [ -x "$(command -v azcopy)" ]; then
+      echo -e "${RED}[ERROR] If the AzCopy CLI shall be used, the command line tool az need to be installed first. Please install it. Please install it." && exit 1
+  else
+      echo -e "${YELLOW}[INFO] The tool azcopy has been found on this system.${NC}"
+      # Print out the version information of the AzCopy CLI tool
+      azcopy --version | grep azcopy
+  fi
+
+  # ... the script needs to check, if the environment variable AZURE_STORAGE_ACCOUNT is set
+  if [ -z "$AZURE_STORAGE_ACCOUNT" ] ; then
+    echo -e "${RED}[ERROR] If the AzCopy CLI shall be used, the environment variable AZURE_STORAGE_ACCOUNT must contain the Storage Account Name of the storage service. Please set it with this command:${NC}\nexport AZURE_STORAGE_ACCOUNT=<storage_account_name>" && exit 1
   fi
 fi
 
@@ -354,7 +376,7 @@ DIRECTORY="testfiles"
 # ATTENTION! When using Google Cloud Storage, Amazon S3, Swift or FakeS3, it is ok when the bucket name is written in lower case.
 # But when using Nimbus Cumulus and S3ninja, the bucket name needs to be in upper case.
 # Minio, Riak CS, S3rver and Scality S3 do not accept bucket names with upper-case letters.
-# 
+#
 # A helpful source about this topic is: http://docs.rightscale.com/faq/clouds/aws/What_are_valid_S3_bucket_names.html
 # "In order to conform with DNS requirements, we recommend following these additional guidelines when creating buckets:"
 # "Bucket names should not contain upper-case letters"
@@ -379,7 +401,7 @@ if [ "$BUCKETNAME_PARAMETER" -eq 0 ] ; then
 fi
 
 # Validate that...
-# NUM_FILES is not 0 
+# NUM_FILES is not 0
 if [ "$NUM_FILES" -eq 0 ] ; then
   echo -e "${RED}[ERROR] Attention: The number of files must not be value zero!${NC}"
   usage
@@ -388,7 +410,7 @@ fi
 
 # Validate that...
 # SIZE_FILES is not less than 4096 and not bigger than 16777216
-if [[ "$SIZE_FILES" -lt 4096 || "$SIZE_FILES" -gt 16777216 ]] ; then
+if [[ "$SIZE_FILES" -lt 4096 || "$SIZE_FILES" -gt 1073741824 ]] ; then
    echo -e "${RED}[ERROR] Attention: The size of the file(s) must be between 4096 and 16777216 Bytes!${NC}"
    usage
    exit 1
@@ -399,9 +421,9 @@ fi
 # ----------------------------------------------------
 # This is not a part of the benchmark!
 # We shall check at least 5 times
-LOOP_VARIABLE=5  
-#until LOOP_VARIABLE is greater than 0 
-while [ $LOOP_VARIABLE -gt "0" ]; do 
+LOOP_VARIABLE=5
+#until LOOP_VARIABLE is greater than 0
+while [ $LOOP_VARIABLE -gt "0" ]; do
   # Check if we have a working network connection by sending a ping to 8.8.8.8
   if ping -q -c 1 -W 1 8.8.8.8 >/dev/null ; then
     echo -e "${GREEN}[OK] This computer has a working internet connection.${NC}"
@@ -414,7 +436,7 @@ while [ $LOOP_VARIABLE -gt "0" ]; do
     if [ "$LOOP_VARIABLE" -eq 0 ] ; then
       echo -e "${RED}[INFO] This computer has no working internet connection.${NC}"
     fi
-    # Wait a moment. 
+    # Wait a moment.
     sleep 1
   fi
 done
@@ -451,6 +473,16 @@ elif [ "$AZURE_CLI" -eq 1 ] ; then
     echo -e "${RED}[ERROR] Unable to access the storage service via the tool az.${NC}" && exit 1
   fi
 # <-=-=-=-> az (end)       <-=-=-=->
+# <-=-=-=-> azcopy (start)     <-=-=-=->
+elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  if azcopy list https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/ ; then
+    echo -e "${GREEN}[OK] The storage service can be accessed via the tool azcopy.${NC}"
+  else
+    echo -e "${RED}[ERROR] Unable to access the storage service via the tool azcopy."
+    echo -e "${RED}        Before starting script do an "azcopy login" or alternatives described in the azcopy documentation.${NC}" && exit 1
+  fi
+# <-=-=-=-> azcopy (end)       <-=-=-=->
 # <-=-=-=-> gsutil (start) <-=-=-=->
 elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
@@ -464,7 +496,7 @@ elif [ "$GOOGLE_API" -eq 1 ] ; then
 elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the aws cli with Amazon AWS S3
     if aws s3 ls ; then
@@ -486,7 +518,7 @@ elif [ "$AWS_CLI_API" -eq 1 ] ; then
 elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
 
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the s4cmd cli with Amazon AWS S3
     if s4cmd ls ; then
@@ -560,7 +592,7 @@ TIME_CREATE_BUCKET_START=$(date +%s.%N)
 # -------------------------------
 # | Create a bucket / container |
 # -------------------------------
-# In the Swift and Azure ecosystem, the buckets are called containers. 
+# In the Swift and Azure ecosystem, the buckets are called containers.
 
 box_out 'Test 1: Create a bucket / container'
 
@@ -585,6 +617,13 @@ elif [ "$AZURE_CLI" -eq 1 ] ; then
   else
     echo -e "${RED}[ERROR] Unable to create the bucket (container) ${BUCKET} with az.${NC}" && exit 1
   fi
+elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  if azcopy make https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET || true ; then
+    echo -e "${GREEN}[OK] Bucket ${BUCKET} has been created with azcopy.${NC}"
+  else
+    echo -e "${RED}[ERROR] Unable to create the bucket (container) ${BUCKET} with azcopy.${NC}" && exit 1
+  fi
 elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
   if [ "$BUCKET_LOCATION" -eq 1 ] ; then
@@ -604,7 +643,7 @@ elif [ "$GOOGLE_API" -eq 1 ] ; then
   fi
 elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the aws cli with Amazon AWS S3
     if aws s3 mb s3://$BUCKET ; then
@@ -624,7 +663,7 @@ elif [ "$AWS_CLI_API" -eq 1 ] ; then
 
 elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the aws cli with Amazon AWS S3
     if s4cmd mb s3://$BUCKET ; then
@@ -681,8 +720,8 @@ sleep 1
 if [ "$S3PERF_CLIENT" -eq 1 ] ; then
   # We shall check at least 5 times
   LOOP_VARIABLE=5
-  # until LOOP_VARIABLE is greater than 0 
-  while [ $LOOP_VARIABLE -gt "0" ]; do 
+  # until LOOP_VARIABLE is greater than 0
+  while [ $LOOP_VARIABLE -gt "0" ]; do
     # Check if the Bucket is accessible
     if s3cmd ls s3://$BUCKET ; then
       echo -e "${GREEN}[OK] The bucket is available (checked with s3cmd).${NC}"
@@ -692,7 +731,7 @@ if [ "$S3PERF_CLIENT" -eq 1 ] ; then
       echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with s3cmd)!${NC}"
       # Decrement variable
       LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-      # Wait a moment. 
+      # Wait a moment.
       sleep 1
     fi
   done
@@ -702,8 +741,8 @@ fi
 if [ "$GOOGLE_API" -eq 1 ] ; then
   # We shall check at least 5 times
   LOOP_VARIABLE=5
-  # until LOOP_VARIABLE is greater than 0 
-  while [ $LOOP_VARIABLE -gt "0" ]; do 
+  # until LOOP_VARIABLE is greater than 0
+  while [ $LOOP_VARIABLE -gt "0" ]; do
     # Check if the Bucket is accessible
     if gsutil ls gs://$BUCKET ; then
       echo -e "${GREEN}[OK] The bucket is available (checked with gsutil).${NC}"
@@ -713,7 +752,7 @@ if [ "$GOOGLE_API" -eq 1 ] ; then
       echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with gsutil)!${NC}"
       # Decrement variable
       LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-      # Wait a moment. 
+      # Wait a moment.
       sleep 1
     fi
   done
@@ -723,10 +762,10 @@ fi
 if [ "$AWS_CLI_API" -eq 1 ] ; then
   # We shall check at least 5 times
   LOOP_VARIABLE=5
-  # until LOOP_VARIABLE is greater than 0 
-  while [ $LOOP_VARIABLE -gt "0" ]; do 
+  # until LOOP_VARIABLE is greater than 0
+  while [ $LOOP_VARIABLE -gt "0" ]; do
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
       # Check if the Bucket is accessible
@@ -738,7 +777,7 @@ if [ "$AWS_CLI_API" -eq 1 ] ; then
         echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with aws)!${NC}"
         # Decrement variable
         LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-        # Wait a moment. 
+        # Wait a moment.
         sleep 1
       fi
     # If the variable $ENDPOINT_URL_ADDRESS is not empty...
@@ -753,7 +792,7 @@ if [ "$AWS_CLI_API" -eq 1 ] ; then
         echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with aws)!${NC}"
         # Decrement variable
         LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-        # Wait a moment. 
+        # Wait a moment.
         sleep 1
       fi
     fi
@@ -764,10 +803,10 @@ fi
 if [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # We shall check at least 5 times
   LOOP_VARIABLE=5
-  # until LOOP_VARIABLE is greater than 0 
-  while [ $LOOP_VARIABLE -gt "0" ]; do 
+  # until LOOP_VARIABLE is greater than 0
+  while [ $LOOP_VARIABLE -gt "0" ]; do
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the s4cmd cli with Amazon AWS S3
       # Check if the Bucket is accessible
@@ -779,7 +818,7 @@ if [ "$S4CMD_CLIENT" -eq 1 ] ; then
         echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with s4cmd)!${NC}"
         # Decrement variable
         LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-        # Wait a moment. 
+        # Wait a moment.
         sleep 1
       fi
     # If the variable $ENDPOINT_URL_ADDRESS is not empty...
@@ -794,7 +833,7 @@ if [ "$S4CMD_CLIENT" -eq 1 ] ; then
         echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with s4cmd)!${NC}"
         # Decrement variable
         LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-        # Wait a moment. 
+        # Wait a moment.
         sleep 1
       fi
     fi
@@ -805,8 +844,8 @@ fi
 if [ "$MINIO_CLIENT" -eq 1 ] ; then
   # We shall check at least 5 times
   LOOP_VARIABLE=5
-  # until LOOP_VARIABLE is greater than 0 
-  while [ $LOOP_VARIABLE -gt "0" ]; do 
+  # until LOOP_VARIABLE is greater than 0
+  while [ $LOOP_VARIABLE -gt "0" ]; do
     # Check if the Bucket is accessible
     if mc ls "$MINIO_CLIENT_ALIAS"/$BUCKET ; then
       echo -e "${GREEN}[OK] The bucket is available (checked with mc).${NC}"
@@ -816,7 +855,7 @@ if [ "$MINIO_CLIENT" -eq 1 ] ; then
       echo -e "${YELLOW}[INFO] The bucket is not yet available (checked with mc)!${NC}"
       # Decrement variable
       LOOP_VARIABLE=$((LOOP_VARIABLE-1))
-      # Wait a moment. 
+      # Wait a moment.
       sleep 1
     fi
   done
@@ -842,7 +881,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
       echo -e "${GREEN}[OK] Files have been uploaded in parallel with swift.${NC}"
     else
       echo -e "${RED}[ERROR] Unable to upload the files in parallel with swift.${NC}" && exit 1
-    fi    
+    fi
   elif [ "$MINIO_CLIENT" -eq 1 ] ; then
   # use the S3 API with mc
     # Upload files in parallel
@@ -855,10 +894,18 @@ if [ "$PARALLEL" -eq 1 ] ; then
   # use the Azure CLI
   # The Azure CLI upload in parallel per default and can't use GNU Parallel.
     # Upload files in parallel
-    if find $DIRECTORY/*.txt | az storage blob upload-batch --destination $BUCKET --source $DIRECTORY/ ; then
+    if find $DIRECTORY/*.txt | paralell az storage blob upload-batch  --overwrite --destination $BUCKET --source $DIRECTORY/{} ; then
       echo -e "${GREEN}[OK] Files have been uploaded in parallel with az.${NC}"
     else
       echo -e "${RED}[ERROR] Unable to upload the files in parallel with az.${NC}" && exit 1
+    fi
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  # Upload files in parallel
+    if find $DIRECTORY/*.txt | parallel azcopy copy {}  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/ --output-level quiet; then
+      echo -e "${GREEN}[OK] Files have been uploaded in parallel with azcopy.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to upload the files in parallel with azcopy.${NC}" && exit 1
     fi
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
@@ -871,7 +918,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
     fi
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
 
@@ -894,7 +941,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
 
   elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the s4cmd cli with Amazon AWS S3
 
@@ -951,6 +998,15 @@ else
     else
       echo -e "${RED}[ERROR] Unable to upload the files sequentially with az.${NC}" && exit 1
     fi
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  # Upload files sequentially
+    if azcopy copy $DIRECTORY/*  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/ ; then
+      echo -e "${GREEN}[OK] Files have been uploaded sequentially with azcopy.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to upload the files sequentially with azcopy.${NC}" && exit 1
+    fi
+  exit
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
     # Upload files sequentially
@@ -962,7 +1018,7 @@ else
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
     # use the AWS CLI with Amazon AWS S3
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # Upload files sequentially
       if aws s3 cp $DIRECTORY/ s3://$BUCKET --recursive --exclude "*" --include "*.txt" ; then
@@ -982,7 +1038,7 @@ else
   elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
     # use the s4cmd CLI with Amazon AWS S3
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # Upload files sequentially
       if s4cmd put $DIRECTORY/*.txt s3://$BUCKET ; then
@@ -1036,7 +1092,7 @@ TIME_OBJECTS_LIST_START=$(date +%s.%N)
 # --------------------------------------------
 # | List files inside the bucket / container |
 # --------------------------------------------
-# In the Swift and Azure ecosystem, the buckets are called containers. 
+# In the Swift and Azure ecosystem, the buckets are called containers.
 
 box_out 'Test 3: List files inside the bucket / container'
 
@@ -1061,6 +1117,13 @@ elif [ "$AZURE_CLI" -eq 1 ] ; then
   else
     echo -e "${RED}[ERROR] Unable to fetch the list of objects inside ${BUCKET} with az.${NC}" && exit 1
   fi
+elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  if azcopy list https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/ ; then
+    echo -e "${GREEN}[OK] The list of objects inside ${BUCKET} has been fetched with azcopy.${NC}"
+  else
+    echo -e "${RED}[ERROR] Unable to fetch the list of objects inside ${BUCKET} with azcopy.${NC}" && exit 1
+  fi
 elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
   if gsutil ls gs://$BUCKET ; then
@@ -1071,7 +1134,7 @@ elif [ "$GOOGLE_API" -eq 1 ] ; then
 elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the aws cli with Amazon AWS S3
     if aws s3 ls s3://$BUCKET ; then
@@ -1091,7 +1154,7 @@ elif [ "$AWS_CLI_API" -eq 1 ] ; then
 elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
 
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the s4cmd cli with Amazon AWS S3
     if s4cmd ls s3://$BUCKET ; then
@@ -1139,8 +1202,8 @@ box_out 'Test 4: Download the files (objects)'
 if [ "$PARALLEL" -eq 1 ] ; then
   # use the Swift API
   if [ "$SWIFT_API" -eq 1 ] ; then
-    # Download files in parallel 
-    # The swift client can download in parallel (and does so per default) but 
+    # Download files in parallel
+    # The swift client can download in parallel (and does so per default) but
     # in order to keep the code simple, ossperf uses the parallel command here too.
     # This removes the subfolder name(s) in the output of find: -type f -printf  "%f\n"
     if find $DIRECTORY/*.txt -type f -printf  "%f\n" | parallel swift download --object-threads=1 $BUCKET testfiles/{} ; then
@@ -1161,10 +1224,18 @@ if [ "$PARALLEL" -eq 1 ] ; then
   # use the Azure CLI
     # Download files in parallel
     # The Azure CLI download in parallel per default and can't use GNU Parallel.
-    if find $DIRECTORY/*.txt | az storage blob download-batch --destination $DIRECTORY/ --source $BUCKET ; then
+    if find $DIRECTORY/*.txt | az storage blob download-batch  --overwrite --destination $DIRECTORY/ --source $BUCKET ; then
       echo -e "${GREEN}[OK] Files have been downloaded in parallel with az.${NC}"
     else
       echo -e "${RED}[ERROR] Unable to download the files in parallel with az." && exit 1
+    fi
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+    # Download files in parallel
+    if find $DIRECTORY/*.txt -type f | cut -d/ -f2- |  parallel azcopy copy  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/{} $DIRECTORY/ --output-level quiet ; then
+      echo -e "${GREEN}[OK] Files have been downloaded in parallel with azcopy.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to download the files in parallel with azcopy." && exit 1
     fi
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
@@ -1178,7 +1249,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
 
@@ -1223,8 +1294,8 @@ else
     # Download files sequentially
     if mc cp -r "$MINIO_CLIENT_ALIAS"/$BUCKET $DIRECTORY ; then
       # mc has up to now not the feature to copy the files directly into the desired folder.
-      # All we can do here is to copy the entire bucket in to the folder as a subfolder and 
-      # later move the files from the subfolder to the desired destination and afterwards 
+      # All we can do here is to copy the entire bucket in to the folder as a subfolder and
+      # later move the files from the subfolder to the desired destination and afterwards
       # remove the subfolder.
       mv $DIRECTORY/$BUCKET/*.txt $DIRECTORY
       rmdir $DIRECTORY/$BUCKET
@@ -1240,6 +1311,14 @@ else
     else
       echo -e "${RED}[ERROR] Unable to download the files sequentially with az.${NC}" && exit 1
     fi
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+    # Download files sequentially
+    if azcopy copy  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/* $DIRECTORY/ --output-level quiet; then
+      echo -e "${GREEN}[OK] Files have been downloaded sequentially with azcopy.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to download the files sequentially with azcopy.${NC}" && exit 1
+    fi
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
     # Download files sequentially
@@ -1251,7 +1330,7 @@ else
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
 
@@ -1318,8 +1397,8 @@ box_out 'Test 5: Erase the files (objects)'
 if [ "$PARALLEL" -eq 1 ] ; then
   # use the Swift API
   if [ "$SWIFT_API" -eq 1 ] ; then
-    # Erase files (objects) inside the bucket in parallel 
-    # The swift client can erase in parallel (and does so per default) but in 
+    # Erase files (objects) inside the bucket in parallel
+    # The swift client can erase in parallel (and does so per default) but in
     # order to keep the code simple, ossperf uses the parallel command here too.
     if find $DIRECTORY/*.txt | parallel swift delete --object-threads=1 $BUCKET {} ; then
       echo -e "${GREEN}[OK] Files inside the bucket (container) ${BUCKET} have been erased with swift.${NC}"
@@ -1338,13 +1417,30 @@ if [ "$PARALLEL" -eq 1 ] ; then
   # use the Azure CLI
     # Erase files (objects) inside the bucket in parallel
     # The Azure CLI delete in parallel per default and can't use GNU Parallel.
-    for i in $(az storage blob list --container-name $BUCKET --output table | awk '{print $1}'| sed '1,2d' | sed '/^$/d') ; do
-      if az storage blob delete --name "$i" --container-name $BUCKET >/dev/null ; then
-        echo -e "${GREEN}[OK] File $i inside the $BUCKET have been erased in parallel with az.${NC}"
-      else
-        echo -e "${RED}[ERROR] Unable to erase the file $i inside the $BUCKET in parallel with az.${NC}" && exit 1
-      fi
-    done
+    if az storage blob list --container-name $BUCKET --output table | awk '{print $1}'| sed '1,2d' | sed '/^$/d' | parallel az storage blob delete --name {} --container-name $BUCKET ; then
+        echo -e "${GREEN}[OK] Files inside the $BUCKET have been erased in parallel with az.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to erase the files inside the $BUCKET in parallel with az.${NC}" && exit 1
+    fi
+  # elif [ "$AZURE_CLI" -eq 1 ] ; then
+  # # use the Azure CLI
+  #   # Erase files (objects) inside the bucket in parallel
+  #   # The Azure CLI delete in parallel per default and can't use GNU Parallel.
+  #   for i in $(az storage blob list --container-name $BUCKET --output table | awk '{print $1}'| sed '1,2d' | sed '/^$/d') ; do
+  #     if az storage blob delete --name "$i" --container-name $BUCKET >/dev/null ; then
+  #       echo -e "${GREEN}[OK] File $i inside the $BUCKET have been erased in parallel with az.${NC}"
+  #     else
+  #       echo -e "${RED}[ERROR] Unable to erase the file $i inside the $BUCKET in parallel with az.${NC}" && exit 1
+  #     fi
+  #   done
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+    # Erase files (objects) inside the bucket in parallel
+    if azcopy list  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET | awk -F':' '{print $2}' | awk -F';' '{print $1}' | sed '/^$/d' | tr -d ' ' | parallel azcopy remove  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/{} --output-level quiet ; then
+        echo -e "${GREEN}[OK] Files inside the $BUCKET have been erased in parallel with azcopy.${NC}"
+    else
+      echo -e "${RED}[ERROR] Unable to erase the files inside the $BUCKET in parallel with azcopy.${NC}" && exit 1
+    fi
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
     # The Google API delete in parallel per -m and can't use GNU Parallel.
@@ -1356,7 +1452,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
       # Erase files (objects) inside the bucket in parallel
@@ -1377,7 +1473,7 @@ if [ "$PARALLEL" -eq 1 ] ; then
   elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the s4cmd cli with Amazon AWS S3
       # Erase files (objects) inside the bucket in parallel
@@ -1433,6 +1529,16 @@ else
         echo -e "${RED}[ERROR] Unable to erase the file $i inside the $BUCKET sequentially with az.${NC}" && exit 1
       fi
     done
+  elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+    # Erase files (objects) inside the bucket sequentially
+    for i in $(azcopy list  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET | awk -F':' '{print $2}' | awk -F';' '{print $1}' | sed '/^$/d' | tr -d ' ') ; do
+      if azcopy remove  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET/$i --output-level quiet;  then
+        echo -e "${GREEN}[OK] File $i inside the $BUCKET have been erased sequentially with azcopy.${NC}"
+      else
+        echo -e "${RED}[ERROR] Unable to erase the file $i inside the $BUCKET sequentially with azcopy.${NC}" && exit 1
+      fi
+    done
   elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
     # Erase files (objects) inside the bucket sequentially
@@ -1444,7 +1550,7 @@ else
   elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the aws cli with Amazon AWS S3
       # Erase files (objects) inside the bucket sequentially
@@ -1465,7 +1571,7 @@ else
   elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
 
-    # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+    # If [ -z "$VAR" ] is true of the variable $VAR is empty.
     if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
       # use the s4cmd cli with Amazon AWS S3
       # Erase files (objects) inside the bucket sequentially
@@ -1509,7 +1615,7 @@ TIME_ERASE_BUCKET_START=$(date +%s.%N)
 # --------------------------------
 # | Erase the bucket / container |
 # --------------------------------
-# In the Swift and Azure ecosystem, the buckets are called containers. 
+# In the Swift and Azure ecosystem, the buckets are called containers.
 
 box_out 'Test 6: Erase the bucket / container'
 
@@ -1534,6 +1640,13 @@ elif [ "$AZURE_CLI" -eq 1 ] ; then
   else
     echo -e "${RED}[ERROR] Unable to erase the bucket (container) ${BUCKET} with az.${NC}" && exit 1
   fi
+elif [ "$AZCOPY_CLI" -eq 1 ] ; then
+  # use the AzCopy CLI
+  if  azcopy remove  https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/$BUCKET --output-level quiet ; then
+    echo -e "${GREEN}[OK] Bucket (Container) ${BUCKET} has been erased with azcopy.${NC}"
+  else
+    echo -e "${RED}[ERROR] Unable to erase the bucket (container) ${BUCKET} with azcopy.${NC}" && exit 1
+  fi
 elif [ "$GOOGLE_API" -eq 1 ] ; then
   # use the Google API
   if gsutil rm -r gs://$BUCKET ; then
@@ -1543,7 +1656,7 @@ elif [ "$GOOGLE_API" -eq 1 ] ; then
   fi
 elif [ "$AWS_CLI_API" -eq 1 ] ; then
   # use the AWS CLI
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the aws cli with Amazon AWS S3
     if aws s3 rb s3://$BUCKET ; then
@@ -1562,7 +1675,7 @@ elif [ "$AWS_CLI_API" -eq 1 ] ; then
   fi
 elif [ "$S4CMD_CLIENT" -eq 1 ] ; then
   # use the s4cmd CLI
-  # If [ -z "$VAR" ] is true of the variable $VAR is empty. 
+  # If [ -z "$VAR" ] is true of the variable $VAR is empty.
   if [ -z "$ENDPOINT_URL_ADDRESS" ] ; then
     # use the s4cmd cli with Amazon AWS S3
     if s4cmd --recursive del s3://$BUCKET ; then
@@ -1624,7 +1737,7 @@ echo '    Bandwidth during the download of the files:         '"${BANDWIDTH_OBJE
 # Create an output file only of the command line parameter was set => value of OUTPUT_FILE is not equal 0
 if ([[ "$OUTPUT_FILE" -ne 0 ]]) ; then
   # If the output file did not already exist...
-  if [ ! -f ${OUTPUT_FILENAME} ] ; then  
+  if [ ! -f ${OUTPUT_FILENAME} ] ; then
     # .. create in the first line the header first
     if echo -e "DATE TIME NUM_FILES SIZE_FILES TIME_CREATE_BUCKET TIME_OBJECTS_UPLOAD TIME_OBJECTS_LIST TIME_OBJECTS_DOWNLOAD TIME_ERASE_OBJECTS TIME_ERASE_BUCKET TIME_SUM BANDWIDTH_OBJECTS_UPLOAD BANDWIDTH_OBJECTS_DOWNLOAD" >> ${OUTPUT_FILENAME} ; then
       echo -e "${GREEN}[OK] A new output file ${OUTPUT_FILENAME} has been created.${NC}"
