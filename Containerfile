@@ -13,13 +13,14 @@ RUN \
   # parallel
     && microdnf install -y parallel \
   # mc binary
-    && wget https://dl.min.io/client/mc/release/linux-amd64/mc && chmod +x mc && mv mc /usr/bin/ \
+    && wget -q https://dl.min.io/client/mc/release/linux-amd64/mc \
+    && chmod +x mc && mv mc /usr/bin/ \
   # azure-cli
     && rpm --import https://packages.microsoft.com/keys/microsoft.asc \
     && rpm -i https://packages.microsoft.com/config/rhel/9.0/packages-microsoft-prod.rpm \
     && microdnf install -y azure-cli \
   # azcopy
-    && wget -O azcopy_v10.tar.gz https://aka.ms/downloadazcopy-v10-linux \
+    && wget -q -O azcopy_v10.tar.gz https://aka.ms/downloadazcopy-v10-linux \
     && tar -xf azcopy_v10.tar.gz --strip-components=1 \
     && rm azcopy_v10.tar.gz \
     && mv azcopy /usr/bin/ \
