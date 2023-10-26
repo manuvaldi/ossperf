@@ -9,7 +9,7 @@ RUN \
   # epel
     microdnf install -y epel-release \
   # tools
-    && microdnf install -y bc wget tar iputils bc wget \
+    && microdnf install -y bc wget tar iputils bc wget unzip \
   # parallel
     && microdnf install -y parallel \
   # mc binary
@@ -29,7 +29,9 @@ RUN \
   # gsutil
     && microdnf install -y google-cloud-cli \
   # aws cli
-    && pip install awscli \
+    && wget -q -O awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
+    && unzip awscliv2.zip \
+    && ./aws/install \
   # clean dnf cache
     && microdnf clean all
 
